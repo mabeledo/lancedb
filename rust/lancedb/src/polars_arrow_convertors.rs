@@ -13,8 +13,10 @@
 /// depended on by polars-arrow and LanceDB may not be compatible,
 /// which necessitates using the C FFI.
 use crate::error::Result;
-use polars::prelude::{DataFrame, Series};
+use polars::prelude::{CompatLevel, DataFrame, Series};
 use std::{mem, sync::Arc};
+
+use polars::datatypes::{DataType, PlSmallStr};
 
 /// When interpreting Polars dataframes as polars-arrow record batches,
 /// one must decide whether to use Arrow string/binary view types
@@ -33,7 +35,7 @@ pub fn convert_polars_df_schema_to_arrow_rb_schema(
     let arrow_fields: Result<Vec<arrow_schema::Field>> = polars_df_schema
         .into_iter()
         .map(|(name, df_dtype)| {
-            let polars_arrow_dtype = df_dtype.to_arrow(POLARS_ARROW_FLAVOR);
+            let polars_arrow_dtype = df_dtype.to_arrow(CompatLevel::newest());
             let polars_field =
                 polars_arrow::datatypes::Field::new(name, polars_arrow_dtype, IS_ARRAY_NULLABLE);
             convert_polars_arrow_field_to_arrow_rs_field(polars_field)
@@ -52,8 +54,8 @@ pub fn convert_arrow_rb_schema_to_polars_df_schema(
         .map(|arrow_rs_field| {
             let polars_arrow_field = convert_arrow_rs_field_to_polars_arrow_field(arrow_rs_field)?;
             Ok(polars::prelude::Field::new(
-                arrow_rs_field.name(),
-                polars::datatypes::DataType::from(polars_arrow_field.data_type()),
+                PlSmallStr::from(arrow_rs_field.name()),
+                DataType::from(polars_arrow_field.dtype())
             ))
         })
         .collect();
@@ -69,11 +71,11 @@ pub fn convert_arrow_rb_to_polars_df(
 
     for (i, column) in arrow_rb.columns().iter().enumerate() {
         let polars_df_dtype = polars_schema.try_get_at_index(i)?.1;
-        let polars_arrow_dtype = polars_df_dtype.to_arrow(POLARS_ARROW_FLAVOR);
+        let polars_arrow_dtype = polars_df_dtype.to_arrow(CompatLevel::newest());
         let polars_array =
             convert_arrow_rs_array_to_polars_arrow_array(column, polars_arrow_dtype)?;
         columns.push(Series::from_arrow(
-            polars_schema.try_get_at_index(i)?.0,
+            polars_schema.try_get_at_index(i)?.0.clone(),
             polars_array,
         )?);
     }
@@ -114,7 +116,7 @@ fn convert_polars_arrow_field_to_arrow_rs_field(
         unsafe { mem::transmute::<_, _>(polars_c_schema) };
     let arrow_rs_dtype = arrow_schema::DataType::try_from(&arrow_c_schema)?;
     Ok(arrow_schema::Field::new(
-        polars_arrow_field.name,
+        polars_arrow_field.name.as_str(),
         arrow_rs_dtype,
         IS_ARRAY_NULLABLE,
     ))
